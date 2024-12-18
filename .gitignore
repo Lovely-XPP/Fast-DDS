@@ -1,6 +1,9 @@
 
 # Created by https://www.gitignore.io/api/c++,java,gradle,vim,visualstudio,windows,linux,cmake,tags,python
 
+### MacOS
+.DS_Store
+
 ### C++ ###
 # Compiled Object files
 *.slo

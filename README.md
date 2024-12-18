@@ -1,5 +1,20 @@
 [![Fast DDS](resources/images/fastdds_github_banner.png)](https://eprosima.com/index.php/products-all/eprosima-fast-dds)
 
+## Modified Tips
+
+- Build from source directly without any dependency installed with the command below (mainly for use fast-dds as third-party lib in your own CMake project)
+
+```bash
+git clone https://github.com/Lovely-XPP/Fast-DDS
+cd Fast-DDS
+git submodule update --init --recursive
+mkdir build && cd build
+cmake ..
+make -j8
+```
+
+***Tips: Different from official, Static Lib will be build.***
+
 <br>
 
 <div class="menu" align="center">
@@ -15,7 +30,6 @@
         <a href="mailto:info@eprosima.com">Contact Us</a>
     </strong>
 </div>
-
 <br><br>
 
 <div class="badges" align="center">
@@ -33,7 +47,6 @@
     <a href="https://github.com/eProsima/Fast-DDS/actions/workflows/nightly-mac-master.yml"><img alt="Fast DDS MacOS CI (nightly)" src="https://github.com/eProsima/Fast-DDS/actions/workflows/nightly-mac-master.yml/badge.svg"/></a>
     <a href="http://jenkins.eprosima.com:8080/job/nightly_fastdds_coverage_linux"><img alt="Coverage" src="https://img.shields.io/jenkins/coverage/cobertura.svg?jobUrl=http%3A%2F%2Fjenkins.eprosima.com%3A8080%2Fjob%2Fnightly_fastdds_coverage_linux"/></a>
 </div>
-
 <br><br>
 
 *eprosima Fast DDS* is a C++ implementation of the DDS (Data Distribution Service) standard of the OMG (Object Management Group).

@@ -242,7 +242,7 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${PROJECT_SOURCE_DIR}/cmake/modules)
 # Global flag to cause add_library() to create shared libraries if on.
 # If set to true, this will cause all libraries to be built shared
 # unless the library was explicitly added as a static library.
-option(BUILD_SHARED_LIBS "Create shared libraries by default" ON)
+option(BUILD_SHARED_LIBS "Create Non shared libraries by default" OFF)
 
 ###############################################################################
 # Load external projects.
@@ -257,9 +257,8 @@ endif()
 eprosima_find_package(fastcdr 2 REQUIRED)
 eprosima_find_thirdparty(Asio asio VERSION 1.10.8)
 eprosima_find_thirdparty(TinyXML2 tinyxml2)
+eprosima_find_package(foonathan_memory REQUIRED)
 
-find_package(foonathan_memory REQUIRED)
-message(STATUS "Found foonathan_memory: ${foonathan_memory_DIR}")
 find_package(ThirdpartyBoost REQUIRED)
 
 if(ANDROID)
