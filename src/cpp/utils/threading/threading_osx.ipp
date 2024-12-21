@@ -136,7 +136,7 @@ static void configure_current_thread_affinity(
         result =
                 thread_policy_set(pthread_mach_thread_np(self_tid), THREAD_AFFINITY_POLICY, (thread_policy_t)&policy,
                         1);
-        if (0 != result)
+        if (KERN_SUCCESS != result && KERN_NOT_SUPPORTED != result)
         {
             EPROSIMA_LOG_ERROR(SYSTEM, "Problem to set affinity of thread with id [" << self_tid << "," << thread_name << "] to value " << affinity << ". Error '" << strerror(
                         result) << "'");
