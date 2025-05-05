@@ -1298,7 +1298,7 @@ TEST_P(Discovery, EndpointCreationMultithreaded)
     endpoint_thr.join();
 }
 
-// Regression test for redmine issue 16253
+//! Regression test for redmine issue 16253
 TEST_P(Discovery, AsymmeticIgnoreParticipantFlags)
 {
     if (INTRAPROCESS != GetParam())
@@ -1416,7 +1416,7 @@ TEST_P(Discovery, single_unicast_pdp_response)
     main_wire_protocol.builtin.discovery_config.initial_announcements.count = 1;
     main_wire_protocol.builtin.discovery_config.initial_announcements.period = { 0, 100000000 };
 
-    // The main participant will use the test transport and a specific announcments configuration
+    // The main participant will use the test transport and a specific announcements configuration
     main_participant->disable_builtin_transport().add_user_transport_to_pparams(test_transport)
             .wire_protocol(main_wire_protocol);
 
@@ -1469,6 +1469,264 @@ TEST_P(Discovery, single_unicast_pdp_response)
     // Check that only two unicast messages per participant were sent
     EXPECT_EQ(num_unicast_sends.load(std::memory_order::memory_order_seq_cst),
             participants.size() + participants.size());
+
+    // Clean up
+    participants.clear();
+}
+
+//! Regression test for redmine issue 22506
+//! Test using a user's flowcontroller limiting the bandwidth and 5 remote participants waiting for the PDP sample.
+TEST_P(Discovery, single_unicast_pdp_response_flowcontroller)
+{
+    // Leverage intraprocess so transport is only used for participant discovery
+    if (INTRAPROCESS != GetParam())
+    {
+        GTEST_SKIP() << "Only makes sense on INTRAPROCESS";
+        return;
+    }
+
+    using namespace eprosima::fastdds::dds;
+
+    // All participants would restrict communication to UDP localhost.
+    // The main participant should send a single initial announcement, and have a big announcement period.
+    // This is to ensure that we only check the datagrams sent in response to the participant discovery,
+    // and not the ones sent in the periodic announcements.
+    // The main participant will use the test transport to count the number of unicast messages sent.
+
+    // This will hold the multicast port. Since the test is not always run in the same domain, we'll need to set
+    // its value when the first multicast datagram is sent.
+    std::atomic<uint32_t> multicast_port{ 0 };
+    // Declare a test transport that will count the number of unicast messages sent
+    std::atomic<size_t> num_unicast_sends{ 0 };
+    auto test_transport = std::make_shared<test_UDPv4TransportDescriptor>();
+    test_transport->interfaceWhiteList.push_back("127.0.0.1");
+    test_transport->locator_filter_ = [&num_unicast_sends, &multicast_port](
+        const eprosima::fastdds::rtps::Locator& destination)
+            {
+                if (IPLocator::isMulticast(destination))
+                {
+                    uint32_t port = 0;
+                    multicast_port.compare_exchange_strong(port, destination.port);
+                }
+                else
+                {
+                    num_unicast_sends.fetch_add(1u, std::memory_order_seq_cst);
+                }
+
+                // Do not discard any message
+                return false;
+            };
+
+    // Create the main participant
+    auto main_participant = std::make_shared<PubSubParticipant<HelloWorldPubSubType>>(0, 0, 0, 0);
+    WireProtocolConfigQos main_wire_protocol;
+    main_wire_protocol.builtin.avoid_builtin_multicast = true;
+    main_wire_protocol.builtin.discovery_config.leaseDuration = c_TimeInfinite;
+    main_wire_protocol.builtin.discovery_config.leaseDuration_announcementperiod = { 3600, 0 };
+    main_wire_protocol.builtin.discovery_config.initial_announcements.count = 1;
+    main_wire_protocol.builtin.discovery_config.initial_announcements.period = { 0, 100000000u };
+    main_wire_protocol.builtin.flow_controller_name = "TestFlowController";
+
+    // Flowcontroller to limit the bandwidth
+    auto test_flow_controller = std::make_shared<eprosima::fastdds::rtps::FlowControllerDescriptor>();
+    test_flow_controller->name = "TestFlowController";
+    test_flow_controller->max_bytes_per_period = 3700;
+    test_flow_controller->period_ms = static_cast<uint64_t>(100);
+
+    // The main participant will use the test transport, specific announcements configuration and a flowcontroller
+    main_participant->disable_builtin_transport().add_user_transport_to_pparams(test_transport)
+            .wire_protocol(main_wire_protocol)
+            .flow_controller(test_flow_controller);
+
+    // Start the main participant
+    ASSERT_TRUE(main_participant->init_participant());
+
+    // Wait for the initial announcements to be sent
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    // This would have set the multicast port
+    EXPECT_NE(multicast_port, 0u);
+
+    // The rest of the participants only send announcements to the main participant
+    // Calculate the metatraffic unicast port of the main participant
+    uint32_t port = multicast_port + main_wire_protocol.port.offsetd1 - main_wire_protocol.port.offsetd0;
+
+    // The rest of the participants only send announcements to the main participant
+    auto udp_localhost_transport = std::make_shared<test_UDPv4TransportDescriptor>();
+    udp_localhost_transport->interfaceWhiteList.push_back("127.0.0.1");
+    Locator peer_locator;
+    IPLocator::createLocator(LOCATOR_KIND_UDPv4, "127.0.0.1", port, peer_locator);
+    WireProtocolConfigQos wire_protocol;
+    wire_protocol.builtin.avoid_builtin_multicast = true;
+    wire_protocol.builtin.initialPeersList.push_back(peer_locator);
+    wire_protocol.builtin.discovery_config.leaseDuration = c_TimeInfinite;
+    wire_protocol.builtin.discovery_config.leaseDuration_announcementperiod = { 3600, 0 };
+    wire_protocol.builtin.discovery_config.initial_announcements.count = 1;
+    wire_protocol.builtin.discovery_config.initial_announcements.period = { 0, 100000000u };
+
+    std::vector<std::shared_ptr<PubSubParticipant<HelloWorldPubSubType>>> participants;
+    for (size_t i = 0; i < 5; ++i)
+    {
+        auto participant = std::make_shared<PubSubParticipant<HelloWorldPubSubType>>(0, 0, 0, 0);
+        // All participants use the same transport
+        participant->disable_builtin_transport().add_user_transport_to_pparams(udp_localhost_transport)
+                .wire_protocol(wire_protocol);
+        participants.push_back(participant);
+    }
+
+    // Start the rest of the participants
+    for (auto& participant : participants)
+    {
+        ASSERT_TRUE(participant->init_participant());
+        participant->wait_discovery(std::chrono::seconds::zero(), 1, true);
+    }
+
+    main_participant->wait_discovery(std::chrono::seconds::zero(), 5, true);
+
+    // When in single threaded application, give some time for the builtin endpoints matching
+    std::this_thread::sleep_for(std::chrono::seconds(5));
+
+    // Destroy main participant
+    main_participant.reset();
+    for (auto& participant : participants)
+    {
+        participant->wait_discovery(std::chrono::seconds::zero(), 0, true);
+    }
+
+    // Check that the main participant sends two unicast messages to every other participant.
+    // One Data[P] and one Data[uP].
+    // Note that in a single core system, the number of unicast messages sent may be one
+    // per participant since the main participant's destruction races with
+    // the asynchronous Data[uP] in the locator selector (the unicast locator of the remote may not be there by the time)
+    // using the multicast instead.
+    EXPECT_GE(num_unicast_sends.load(std::memory_order::memory_order_seq_cst),
+            participants.size());
+
+    // Clean up
+    participants.clear();
+}
+
+//! Regression test for redmine issue 22506
+//! Same test as single_unicast_pdp_response_flowcontroller but the main participant's builtin controller is so limited
+//! that it will not be able to send all the initial announcements.
+TEST_P(Discovery, single_unicast_pdp_response_flowcontroller_limited)
+{
+    // Leverage intraprocess so transport is only used for participant discovery
+    if (INTRAPROCESS != GetParam())
+    {
+        GTEST_SKIP() << "Only makes sense on INTRAPROCESS";
+        return;
+    }
+
+    using namespace eprosima::fastdds::dds;
+
+    // All participants would restrict communication to UDP localhost.
+    // The main participant should send a single initial announcement, and have a big announcement period.
+    // This is to ensure that we only check the datagrams sent in response to the participant discovery,
+    // and not the ones sent in the periodic announcements.
+    // The main participant will use the test transport to count the number of unicast messages sent.
+
+    // This will hold the multicast port. Since the test is not always run in the same domain, we'll need to set
+    // its value when the first multicast datagram is sent.
+    std::atomic<uint32_t> multicast_port{ 0 };
+    // Declare a test transport that will count the number of unicast messages sent
+    std::atomic<size_t> num_unicast_sends{ 0 };
+    auto test_transport = std::make_shared<test_UDPv4TransportDescriptor>();
+    test_transport->interfaceWhiteList.push_back("127.0.0.1");
+    test_transport->locator_filter_ = [&num_unicast_sends, &multicast_port](
+        const eprosima::fastdds::rtps::Locator& destination)
+            {
+                if (IPLocator::isMulticast(destination))
+                {
+                    uint32_t port = 0;
+                    multicast_port.compare_exchange_strong(port, destination.port);
+                }
+                else
+                {
+                    num_unicast_sends.fetch_add(1u, std::memory_order_seq_cst);
+                }
+
+                // Do not discard any message
+                return false;
+            };
+
+    // Create the main participant
+    auto main_participant = std::make_shared<PubSubParticipant<HelloWorldPubSubType>>(0, 0, 0, 0);
+    WireProtocolConfigQos main_wire_protocol;
+    main_wire_protocol.builtin.avoid_builtin_multicast = true;
+    main_wire_protocol.builtin.discovery_config.leaseDuration = c_TimeInfinite;
+    main_wire_protocol.builtin.discovery_config.leaseDuration_announcementperiod = { 3600, 0 };
+    main_wire_protocol.builtin.discovery_config.initial_announcements.count = 1;
+    main_wire_protocol.builtin.discovery_config.initial_announcements.period = { 0, 100000000u };
+    main_wire_protocol.builtin.flow_controller_name = "TestFlowController";
+
+    // Flowcontroller to limit the bandwidth
+    auto test_flow_controller = std::make_shared<eprosima::fastdds::rtps::FlowControllerDescriptor>();
+    test_flow_controller->name = "TestFlowController";
+    test_flow_controller->max_bytes_per_period = 3700;
+    test_flow_controller->period_ms = static_cast<uint64_t>(100000);
+
+    // The main participant will use the test transport, specific announcements configuration and a flowcontroller
+    main_participant->disable_builtin_transport().add_user_transport_to_pparams(test_transport)
+            .wire_protocol(main_wire_protocol)
+            .flow_controller(test_flow_controller);
+
+    // Start the main participant
+    ASSERT_TRUE(main_participant->init_participant());
+
+    // Wait for the initial announcements to be sent
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    // This would have set the multicast port
+    EXPECT_NE(multicast_port, 0u);
+
+    // The rest of the participants only send announcements to the main participant
+    // Calculate the metatraffic unicast port of the main participant
+    uint32_t port = multicast_port + main_wire_protocol.port.offsetd1 - main_wire_protocol.port.offsetd0;
+
+    // The rest of the participants only send announcements to the main participant
+    auto udp_localhost_transport = std::make_shared<test_UDPv4TransportDescriptor>();
+    udp_localhost_transport->interfaceWhiteList.push_back("127.0.0.1");
+    Locator peer_locator;
+    IPLocator::createLocator(LOCATOR_KIND_UDPv4, "127.0.0.1", port, peer_locator);
+    WireProtocolConfigQos wire_protocol;
+    wire_protocol.builtin.avoid_builtin_multicast = true;
+    wire_protocol.builtin.initialPeersList.push_back(peer_locator);
+    wire_protocol.builtin.discovery_config.leaseDuration = c_TimeInfinite;
+    wire_protocol.builtin.discovery_config.leaseDuration_announcementperiod = { 3600, 0 };
+    wire_protocol.builtin.discovery_config.initial_announcements.count = 1;
+    wire_protocol.builtin.discovery_config.initial_announcements.period = { 0, 100000000u };
+
+    std::vector<std::shared_ptr<PubSubParticipant<HelloWorldPubSubType>>> participants;
+    for (size_t i = 0; i < 10; ++i)
+    {
+        auto participant = std::make_shared<PubSubParticipant<HelloWorldPubSubType>>(0, 0, 0, 0);
+        // All participants use the same transport
+        participant->disable_builtin_transport().add_user_transport_to_pparams(udp_localhost_transport)
+                .wire_protocol(wire_protocol);
+        participants.push_back(participant);
+    }
+
+    // Start the rest of the participants
+    for (auto& participant : participants)
+    {
+        ASSERT_TRUE(participant->init_participant());
+        participant->wait_discovery(std::chrono::seconds(1), 1, true);
+    }
+
+    // The builtin flowcontroller of the main participant will not be able to send all the initial announcements as the max byter per period has already
+    // been reached. In fact no more messages will be sent from the builtin writers of the main participant.
+    EXPECT_LT(num_unicast_sends.load(std::memory_order::memory_order_seq_cst), participants.size());
+    auto num_unicast_sends_limit = num_unicast_sends.load(std::memory_order::memory_order_seq_cst);
+
+    // Destroy main participant
+    main_participant.reset();
+    for (auto& participant : participants)
+    {
+        participant->wait_discovery(std::chrono::seconds(1), 0, true);
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    // No more messages have been sent sin the limit was reached
+    EXPECT_EQ(num_unicast_sends.load(std::memory_order::memory_order_seq_cst), num_unicast_sends_limit);
 
     // Clean up
     participants.clear();
@@ -1769,4 +2027,340 @@ TEST(Discovery, discovery_cyclone_participant_with_custom_pid)
 
     /* Clean up */
     factory->delete_participant(participant);
+}
+
+// This test checks that a Discover Server does not send duplicated PDP messages of itself when new clients
+// are discovered
+TEST_P(Discovery, discovery_server_pdp_messages_sent)
+{
+    // Skip test in intraprocess and datasharing mode
+    if (TRANSPORT != GetParam())
+    {
+        GTEST_SKIP() << "Only makes sense on TRANSPORT";
+        return;
+    }
+
+    using namespace eprosima::fastdds::dds;
+
+    // One discovery server will be created, with multiple direct clients connected to it.
+    // Initial announcements will be disabled and lease announcements will be configured to control discovery sequence.
+    // The main participant will use the test transport to count the number of Data(p) sent.
+
+    // Look for the PID_DOMAIN_ID in the message as it is only present in Data(p) messages
+    auto builtin_msg_is_data_p = [](CDRMessage_t& msg, std::atomic<size_t>& num_data_p)
+            {
+                uint32_t qos_size = 0;
+                uint32_t original_pos = msg.pos;
+                bool is_sentinel = false;
+                bool inline_qos_msg = false;
+
+                while (!is_sentinel)
+                {
+                    msg.pos = original_pos + qos_size;
+
+                    uint16_t pid = eprosima::fastdds::helpers::cdr_parse_u16(
+                        (char*)&msg.buffer[msg.pos]);
+                    msg.pos += 2;
+                    uint16_t plength = eprosima::fastdds::helpers::cdr_parse_u16(
+                        (char*)&msg.buffer[msg.pos]);
+                    msg.pos += 2;
+                    bool valid = true;
+
+                    // If inline_qos submessage is found we will have an additional Sentinel
+                    if (pid == eprosima::fastdds::dds::PID_RELATED_SAMPLE_IDENTITY)
+                    {
+                        inline_qos_msg = true;
+                    }
+                    else if (pid == eprosima::fastdds::dds::PID_SENTINEL)
+                    {
+                        // PID_SENTINEL is always considered of length 0
+                        plength = 0;
+                        if (!inline_qos_msg)
+                        {
+                            // If the PID is not inline qos, then we need to set the sentinel
+                            // to true, as it is the last PID
+                            is_sentinel = true;
+                        }
+                    }
+
+                    qos_size += (4 + plength);
+
+                    // Align to 4 byte boundary and prepare for next iteration
+                    qos_size = (qos_size + 3) & ~3;
+
+                    if (!valid || ((msg.pos + plength) > msg.length))
+                    {
+                        return false;
+                    }
+                    else if (!is_sentinel)
+                    {
+                        if (pid == eprosima::fastdds::dds::PID_DOMAIN_ID)
+                        {
+                            std::cout << "Data(p) sent by the server" << std::endl;
+                            inline_qos_msg = false;
+                            num_data_p.fetch_add(1u, std::memory_order_seq_cst);
+                            break;
+                        }
+                    }
+                }
+
+                // Do not drop the packet in any case
+                return false;
+            };
+
+    // Declare a test transport that will count the number of Data(p) messages sent
+    std::atomic<size_t> num_data_p_sends{ 0 };
+    auto test_transport = std::make_shared<test_UDPv4TransportDescriptor>();
+    test_transport->drop_builtin_data_messages_filter_ = [&](CDRMessage_t& msg)
+            {
+                return builtin_msg_is_data_p(msg, num_data_p_sends);
+            };
+
+    // Create the main participant
+    auto server = std::make_shared<PubSubParticipant<HelloWorldPubSubType>>(0, 0, 0, 0);
+
+    Locator_t locator_server;  // UDPv4 locator by default
+    eprosima::fastdds::rtps::IPLocator::setIPv4(locator_server, 127, 0, 0, 1);
+    eprosima::fastdds::rtps::IPLocator::setPhysicalPort(locator_server, global_port);
+
+    WireProtocolConfigQos server_wp_qos;
+    server_wp_qos.builtin.discovery_config.discoveryProtocol = DiscoveryProtocol::SERVER;
+    server_wp_qos.builtin.metatrafficUnicastLocatorList.push_back(locator_server);
+
+    server_wp_qos.builtin.discovery_config.leaseDuration = c_TimeInfinite;
+    server_wp_qos.builtin.discovery_config.leaseDuration_announcementperiod = c_TimeInfinite;
+    server_wp_qos.builtin.discovery_config.initial_announcements.count = 0;
+
+    // The main participant will use the test transport and a specific announcements configuration
+    server->disable_builtin_transport().add_user_transport_to_pparams(test_transport)
+            .wire_protocol(server_wp_qos);
+
+    // Start the main participant
+    ASSERT_TRUE(server->init_participant());
+
+    // Create a client that connects to the first server
+    PubSubParticipant<HelloWorldPubSubType> client_1(0u, 0u, 0u, 0u);
+    PubSubParticipant<HelloWorldPubSubType> client_2(0u, 0u, 0u, 0u);
+    PubSubParticipant<HelloWorldPubSubType> client_3(0u, 0u, 0u, 0u);
+    // Set participant as client
+    WireProtocolConfigQos client_qos;
+    client_qos.builtin.discovery_config.discoveryProtocol = DiscoveryProtocol::CLIENT;
+    client_qos.builtin.discovery_config.m_DiscoveryServers.push_back(locator_server);
+    client_qos.builtin.discovery_config.leaseDuration = c_TimeInfinite;
+    client_qos.builtin.discovery_config.leaseDuration_announcementperiod = c_TimeInfinite;
+    client_qos.builtin.discovery_config.initial_announcements.count = 1;
+    // Init client 1
+    ASSERT_TRUE(client_1.wire_protocol(client_qos)
+                    .setup_transports(eprosima::fastdds::rtps::BuiltinTransports::UDPv4)
+                    .init_participant());
+
+    // Wait for the initial announcements to be sent
+    server->wait_discovery(std::chrono::seconds(5), 1, true);
+    // Let some time for the server to run the internal routine and check if it sent Data(p)
+    std::this_thread::sleep_for(std::chrono::seconds(3));
+    EXPECT_EQ(num_data_p_sends.load(std::memory_order::memory_order_seq_cst), 1u);
+
+    // Init client 2
+    ASSERT_TRUE(client_2.wire_protocol(client_qos)
+                    .setup_transports(eprosima::fastdds::rtps::BuiltinTransports::UDPv4)
+                    .init_participant());
+
+
+    // Wait for the initial announcements to be sent
+    server->wait_discovery(std::chrono::seconds(5), 2, true);
+    // Let some time for the server to run the internal routine and check if it sent Data(p)
+    std::this_thread::sleep_for(std::chrono::seconds(3));
+    EXPECT_EQ(num_data_p_sends.load(std::memory_order::memory_order_seq_cst), 2u);
+
+    // Init client 3
+    ASSERT_TRUE(client_3.wire_protocol(client_qos)
+                    .setup_transports(eprosima::fastdds::rtps::BuiltinTransports::UDPv4)
+                    .init_participant());
+
+
+    // Wait for the initial announcements to be sent
+    server->wait_discovery(std::chrono::seconds(5), 3, true);
+    // Let some time for the server to run the internal routine and check if it sent Data(p)
+    std::this_thread::sleep_for(std::chrono::seconds(3));
+    EXPECT_EQ(num_data_p_sends.load(std::memory_order::memory_order_seq_cst), 3u);
+}
+
+TEST_P(Discovery, discovery_server_edp_messages_sent)
+{
+    // Skip test in intraprocess and datasharing mode
+    if (TRANSPORT != GetParam())
+    {
+        GTEST_SKIP() << "Only makes sense on TRANSPORT";
+        return;
+    }
+
+    using namespace eprosima::fastdds::dds;
+
+    // Two discovery servers will be created, each with a direct client connected to them.
+    // Initial announcements will be disabled and lease announcements will be configured to control discovery sequence.
+    // The main participant will use the test transport to count the number of Data(r/w) sent.
+
+    // Look for the PID_ENDPOINT_GUID in the message as it is only present in Data(r/w) messages
+    auto builtin_msg_is_data_r_w = [](CDRMessage_t& msg, std::atomic<size_t>& num_data_r_w)
+            {
+                uint32_t qos_size = 0;
+                uint32_t original_pos = msg.pos;
+                bool is_sentinel = false;
+                bool inline_qos_msg = false;
+
+                while (!is_sentinel)
+                {
+                    msg.pos = original_pos + qos_size;
+
+                    uint16_t pid = eprosima::fastdds::helpers::cdr_parse_u16(
+                        (char*)&msg.buffer[msg.pos]);
+                    msg.pos += 2;
+                    uint16_t plength = eprosima::fastdds::helpers::cdr_parse_u16(
+                        (char*)&msg.buffer[msg.pos]);
+                    msg.pos += 2;
+                    bool valid = true;
+
+                    if (pid == eprosima::fastdds::dds::PID_RELATED_SAMPLE_IDENTITY)
+                    {
+                        inline_qos_msg = true;
+                    }
+                    else if (pid == eprosima::fastdds::dds::PID_SENTINEL)
+                    {
+                        // PID_SENTINEL is always considered of length 0
+                        plength = 0;
+                        if (!inline_qos_msg)
+                        {
+                            // If the PID is not inline qos, then we need to set the sentinel
+                            // to true, as it is the last PID
+                            is_sentinel = true;
+                        }
+                    }
+
+                    qos_size += (4 + plength);
+
+                    // Align to 4 byte boundary and prepare for next iteration
+                    qos_size = (qos_size + 3) & ~3;
+
+                    if (!valid || ((msg.pos + plength) > msg.length))
+                    {
+                        return false;
+                    }
+                    else if (!is_sentinel)
+                    {
+                        if (pid == eprosima::fastdds::dds::PID_ENDPOINT_GUID)
+                        {
+                            std::cout << "Data (r/w) sent by the server" << std::endl;
+                            num_data_r_w.fetch_add(1u, std::memory_order_seq_cst);
+                            break;
+                        }
+                        else if (pid == eprosima::fastdds::dds::PID_VENDORID)
+                        {
+                            // Vendor ID is present in both Data(p) and Data(r/w) messages
+                            inline_qos_msg = false;
+                        }
+                    }
+                }
+
+                // Do not drop the packet in any case
+                return false;
+            };
+
+    // Declare a test transport that will count the number of Data(r/w) messages sent
+    std::atomic<size_t> num_data_r_w_sends_s1{ 0 };
+    std::atomic<size_t> num_data_r_w_sends_s2{ 0 };
+    auto test_transport_s1 = std::make_shared<test_UDPv4TransportDescriptor>();
+    test_transport_s1->drop_builtin_data_messages_filter_ = [&](CDRMessage_t& msg)
+            {
+                return builtin_msg_is_data_r_w(msg, num_data_r_w_sends_s1);
+            };
+
+    auto test_transport_s2 = std::make_shared<test_UDPv4TransportDescriptor>();
+    test_transport_s2->drop_builtin_data_messages_filter_ = [&](CDRMessage_t& msg)
+            {
+                return builtin_msg_is_data_r_w(msg, num_data_r_w_sends_s2);
+            };
+
+    // Create server 1
+    auto server_1 = std::make_shared<PubSubParticipant<HelloWorldPubSubType>>(0, 0, 0, 0);
+
+    Locator_t locator_server_1;  // UDPv4 locator by default
+    eprosima::fastdds::rtps::IPLocator::setIPv4(locator_server_1, 127, 0, 0, 1);
+    eprosima::fastdds::rtps::IPLocator::setPhysicalPort(locator_server_1, global_port);
+
+    WireProtocolConfigQos server_wp_qos_1;
+    server_wp_qos_1.builtin.discovery_config.discoveryProtocol = DiscoveryProtocol::SERVER;
+    server_wp_qos_1.builtin.metatrafficUnicastLocatorList.push_back(locator_server_1);
+
+    server_wp_qos_1.builtin.discovery_config.leaseDuration = c_TimeInfinite;
+    server_wp_qos_1.builtin.discovery_config.leaseDuration_announcementperiod = c_TimeInfinite;
+    server_wp_qos_1.builtin.discovery_config.initial_announcements.count = 0;
+
+    // The main participant will use the test transport and a specific announcements configuration
+    server_1->disable_builtin_transport().add_user_transport_to_pparams(test_transport_s1)
+            .wire_protocol(server_wp_qos_1);
+
+    // Start the main participant
+    ASSERT_TRUE(server_1->init_participant());
+
+    // Create server 2
+    auto server_2 = std::make_shared<PubSubParticipant<HelloWorldPubSubType>>(0, 0, 0, 0);
+
+    Locator_t locator_server_2 = locator_server_1;  // UDPv4 locator by default
+    eprosima::fastdds::rtps::IPLocator::setPhysicalPort(locator_server_2, global_port + 1);
+
+    WireProtocolConfigQos server_wp_qos_2 = server_wp_qos_1;
+    server_wp_qos_2.builtin.metatrafficUnicastLocatorList.clear();
+    server_wp_qos_2.builtin.metatrafficUnicastLocatorList.push_back(locator_server_2);
+    // Configure 1 initial announcement as this Server will connect to the first one
+    server_wp_qos_2.builtin.discovery_config.initial_announcements.count = 1;
+    server_wp_qos_2.builtin.discovery_config.m_DiscoveryServers.push_back(locator_server_1);
+
+    // The main participant will use the test transport and a specific announcements configuration
+    server_2->disable_builtin_transport().add_user_transport_to_pparams(test_transport_s2)
+            .wire_protocol(server_wp_qos_2);
+
+    // Start the main participant
+    ASSERT_TRUE(server_2->init_participant());
+
+    // Both servers match
+    server_1->wait_discovery(std::chrono::seconds(5), 1, true);
+    server_2->wait_discovery(std::chrono::seconds(5), 1, true);
+    // Let some time for the server to run the internal routine and match virtual endpoints
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+
+    // Create a client that connects to their corresponding server
+    PubSubWriter<HelloWorldPubSubType> client_1(TEST_TOPIC_NAME);
+    PubSubReader<HelloWorldPubSubType> client_2(TEST_TOPIC_NAME);
+    // Set participant as client
+    WireProtocolConfigQos client_qos;
+    client_qos.builtin.discovery_config.discoveryProtocol = DiscoveryProtocol::CLIENT;
+    client_qos.builtin.discovery_config.m_DiscoveryServers.push_back(locator_server_1);
+    client_qos.builtin.discovery_config.leaseDuration = c_TimeInfinite;
+    client_qos.builtin.discovery_config.leaseDuration_announcementperiod = { 15, 0 };
+    client_qos.builtin.discovery_config.initial_announcements.count = 0;
+
+    // Init client 1
+    client_1.set_wire_protocol_qos(client_qos)
+            .setup_transports(eprosima::fastdds::rtps::BuiltinTransports::UDPv4)
+            .init();
+
+    // Init client 2
+    client_qos.builtin.discovery_config.m_DiscoveryServers.clear();
+    client_qos.builtin.discovery_config.m_DiscoveryServers.push_back(locator_server_2);
+    client_2.set_wire_protocol_qos(client_qos)
+            .setup_transports(eprosima::fastdds::rtps::BuiltinTransports::UDPv4)
+            .init();
+
+    ASSERT_TRUE(client_1.isInitialized());
+    ASSERT_TRUE(client_2.isInitialized());
+
+    // Wait the lease announcement period to discover endpoints
+    server_1->wait_discovery(std::chrono::seconds(5), 2, true);
+    server_2->wait_discovery(std::chrono::seconds(5), 2, true);
+
+    // Ensure that no additional Data(r/w) messages are sent by DS routine
+    std::this_thread::sleep_for(std::chrono::seconds(15));
+
+    EXPECT_EQ(num_data_r_w_sends_s1.load(std::memory_order::memory_order_seq_cst), 2u);
+    EXPECT_EQ(num_data_r_w_sends_s2.load(std::memory_order::memory_order_seq_cst), 2u);
 }

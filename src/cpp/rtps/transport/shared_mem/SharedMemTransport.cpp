@@ -48,7 +48,7 @@ namespace fastdds {
 namespace rtps {
 
 // TODO(Adolfo): Calculate this value from UDP sockets buffers size.
-static constexpr uint32_t shm_default_segment_size = 512 * 1024;
+static constexpr uint32_t shm_default_segment_size = SharedMemTransportDescriptor::shm_implicit_segment_size;
 
 TransportInterface* SharedMemTransportDescriptor::create_transport() const
 {
@@ -470,14 +470,13 @@ std::shared_ptr<SharedMemManager::Buffer> SharedMemTransport::copy_to_shared_buf
 
     assert(shared_mem_segment_);
 
-    std::shared_ptr<SharedMemManager::Buffer> shared_buffer =
-            shared_mem_segment_->alloc_buffer(total_bytes, max_blocking_time_point);
-    uint8_t* pos = static_cast<uint8_t*>(shared_buffer->data());
-
     // Statistics submessage is always the last buffer to be added
     // If statistics message is present, skip last buffer
     auto it_end = remove_statistics_buffer(buffers.back(), total_bytes) ? std::prev(buffers.end()) : buffers.end();
 
+    std::shared_ptr<SharedMemManager::Buffer> shared_buffer =
+            shared_mem_segment_->alloc_buffer(total_bytes, max_blocking_time_point);
+    uint8_t* pos = static_cast<uint8_t*>(shared_buffer->data());
 
     for (auto it = buffers.begin(); it != it_end; ++it)
     {

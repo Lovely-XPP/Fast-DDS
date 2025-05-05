@@ -1,6 +1,17 @@
 Forthcoming
 -----------
 
+Version v3.2.2
+--------------
+
+* Improve `IDLParser` adding support to new types:
+  * Add support for parsing sequence types.
+  * Move logic for managing `state["type"]` changes to `action<scoped_name>`.
+  * Refactor union types parsing to be similar to array types.
+
+Version v3.2.0
+--------------
+
 * Added implementation for:
   * `DataWriter::get_matched_subscription_data()`
   * `DataWriter::get_matched_subscriptions()`
@@ -17,6 +28,11 @@ Forthcoming
   * New `ROS2_EASY_MODE` environment variable
   * Extended CLI ``discovery`` command to handle Fast DDS daemon.
   * Added P2P builtin transport.
+  * Added new `easy_mode_ip` XML tag and `easy_mode` setter in `WireProtocolConfigQos` for Easy Mode IP configuration through XML and code.
+* Added RPC over DDS internal API:
+  * New classes: `Service`, `Requester`, `Replier`, `ServiceTypeSupport`
+  * Added methods in DomainParticipant public API
+* Added builtin flow controller for builtin writers (PDP, EDP, WLP and Type Look Up Service).
 
 Version v3.1.0
 --------------

@@ -73,6 +73,10 @@ set(${PROJECT_NAME}_source_files
     fastdds/publisher/qos/DataWriterQos.cpp
     fastdds/publisher/qos/PublisherQos.cpp
     fastdds/publisher/qos/WriterQos.cpp
+    fastdds/rpc/ServiceImpl.cpp
+    fastdds/rpc/ReplierImpl.cpp
+    fastdds/rpc/RequesterImpl.cpp
+    fastdds/rpc/ServiceTypeSupport.cpp
     fastdds/subscriber/DataReader.cpp
     fastdds/subscriber/DataReaderImpl.cpp
     fastdds/subscriber/history/DataReaderHistory.cpp
@@ -117,8 +121,10 @@ set(${PROJECT_NAME}_source_files
     rtps/attributes/ServerAttributes.cpp
     rtps/attributes/ThreadSettings.cpp
     rtps/builtin/BuiltinProtocols.cpp
+    rtps/builtin/data/ParticipantBuiltinTopicData.cpp
     rtps/builtin/data/ParticipantProxyData.cpp
-    rtps/builtin/data/ProxyDataConverters.cpp
+    rtps/builtin/data/PublicationBuiltinTopicData.cpp
+    rtps/builtin/data/SubscriptionBuiltinTopicData.cpp
     rtps/builtin/data/ReaderProxyData.cpp
     rtps/builtin/data/WriterProxyData.cpp
     rtps/builtin/discovery/database/backup/SharedBackupFunctions.cpp

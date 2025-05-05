@@ -60,6 +60,8 @@ file(GLOB RTPS_BLACKBOXTESTS_TEST_SOURCE "common/RTPSBlackboxTests*.cpp")
 set(RTPS_BLACKBOXTESTS_SOURCE ${RTPS_BLACKBOXTESTS_TEST_SOURCE}
     types/Data1mbPubSubTypes.cxx
     types/Data1mbTypeObjectSupport.cxx
+    types/Data100kbPubSubTypes.cxx
+    types/Data100kbTypeObjectSupport.cxx
     types/Data64kbPubSubTypes.cxx
     types/Data64kbTypeObjectSupport.cxx
     types/FixedSizedPubSubTypes.cxx
@@ -103,6 +105,8 @@ file(GLOB BLACKBOXTESTS_TEST_SOURCE "common/BlackboxTests*.cpp")
 set(BLACKBOXTESTS_SOURCE ${BLACKBOXTESTS_TEST_SOURCE}
     types/Data1mbPubSubTypes.cxx
     types/Data1mbTypeObjectSupport.cxx
+    types/Data100kbPubSubTypes.cxx
+    types/Data100kbTypeObjectSupport.cxx
     types/Data64kbPubSubTypes.cxx
     types/Data64kbTypeObjectSupport.cxx
     types/FixedSizedPubSubTypes.cxx
@@ -130,6 +134,7 @@ set(BLACKBOXTESTS_SOURCE ${BLACKBOXTESTS_TEST_SOURCE}
     common/DatagramInjectionTransport.cpp
     api/dds-pim/TCPReqRepHelloWorldRequester.cpp
     api/dds-pim/TCPReqRepHelloWorldReplier.cpp
+    api/dds-pim/TCPReqRepHelloWorldService.cpp
     )
 
 file(GLOB DDS_BLACKBOXTESTS_TEST_SOURCE "common/DDSBlackboxTests*.cpp")
@@ -184,6 +189,7 @@ if(FASTDDS_PIM_API_TESTS)
         ${DDS_BLACKBOXTESTS_SOURCE}
         api/dds-pim/ReqRepHelloWorldRequester.cpp
         api/dds-pim/ReqRepHelloWorldReplier.cpp
+        api/dds-pim/ReqRepHelloWorldService.cpp
         )
 
     if (FASTDDS_STATISTICS)

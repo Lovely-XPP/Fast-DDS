@@ -377,6 +377,9 @@ public:
     //! Mutation tries if the port is being used.
     uint32_t mutation_tries = 100u;
 
+    //! Flow controller name to use for the builtin writers
+    std::string flow_controller_name = "";
+
     //! Set to true to avoid multicast traffic on builtin endpoints
     bool avoid_builtin_multicast = true;
 
@@ -399,6 +402,7 @@ public:
                (this->writerHistoryMemoryPolicy == b.writerHistoryMemoryPolicy) &&
                (this->writerPayloadSize == b.writerPayloadSize) &&
                (this->mutation_tries == b.mutation_tries) &&
+               (this->flow_controller_name == b.flow_controller_name) &&
                (this->avoid_builtin_multicast == b.avoid_builtin_multicast);
     }
 
@@ -433,6 +437,7 @@ public:
                (this->port == b.port) &&
                (this->userData == b.userData) &&
                (this->participantID == b.participantID) &&
+               (this->easy_mode_ip == b.easy_mode_ip) &&
                (this->useBuiltinTransports == b.useBuiltinTransports) &&
                (this->properties == b.properties) &&
                (this->prefix == b.prefix) &&
@@ -552,6 +557,9 @@ public:
 
     //! Participant ID
     int32_t participantID = -1;
+
+    //! IP of the Host where master Server is located (EASY_MODE context)
+    std::string easy_mode_ip = "";
 
     //! User defined transports to use alongside or in place of builtins.
     std::vector<std::shared_ptr<fastdds::rtps::TransportDescriptorInterface>> userTransports;

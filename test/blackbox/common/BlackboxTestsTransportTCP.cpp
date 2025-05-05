@@ -1271,9 +1271,10 @@ TEST_P(TransportTCP, large_message_large_data_send_receive)
     PubSubReader<Data1mbPubSubType> reader(TEST_TOPIC_NAME);
     PubSubWriter<Data1mbPubSubType> writer(TEST_TOPIC_NAME);
 
-    uint32_t tcp_negotiation_timeout = 100;
-    writer.setup_large_data_tcp(use_ipv6, 0, tcp_negotiation_timeout);
-    reader.setup_large_data_tcp(use_ipv6, 0, tcp_negotiation_timeout);
+    BuiltinTransportsOptions options;
+    options.tcp_negotiation_timeout = 100;
+    writer.setup_large_data_tcp(use_ipv6, 0, options);
+    reader.setup_large_data_tcp(use_ipv6, 0, options);
 
     // Init participants
     writer.init();
@@ -1504,6 +1505,101 @@ TEST_P(TransportTCP, tcp_unique_network_flows_communication)
     ASSERT_TRUE(data.empty());
     // Block until readers have acknowledged all samples.
     EXPECT_TRUE(writer.waitForAllAcked(std::chrono::seconds(30)));
+}
+
+/**
+ * This verifies that a best effort reader is capable of creating resources when a new locator
+ * is received along a Data(W) in order to start communication. This will ensure the creation a new connect channel.
+ * The reader must have the lowest listening port to force the participant to create the channel.
+ */
+TEST_P(TransportTCP, best_effort_reader_tcp_resources_creation)
+{
+    PubSubWriter<HelloWorldPubSubType> writer(TEST_TOPIC_NAME);
+    PubSubReader<HelloWorldPubSubType> reader(TEST_TOPIC_NAME);
+
+    // Large data setup is reused to enable UDP for multicast and TCP for data.
+    // However, the metatraffic unicast needs to be replaced for UDP to ensure that the TCP
+    // locator is not announced in the Data(P) (In large data the metatraffic unicast is TCP).
+    LocatorList metatraffic_unicast;
+    eprosima::fastdds::rtps::Locator_t udp_locator;
+    udp_locator.kind = LOCATOR_KIND_UDPv4;
+    eprosima::fastdds::rtps::IPLocator::setIPv4(udp_locator, "127.0.0.1");
+    metatraffic_unicast.push_back(udp_locator);
+
+    // Writer with highest listening port will wait for connection
+    writer.setup_large_data_tcp(use_ipv6, global_port + 1)
+            .metatraffic_unicast_locator_list(metatraffic_unicast)
+            .init();
+
+    // Reader with lowest listening port to force the connection channel creation
+    reader.setup_large_data_tcp(use_ipv6, global_port)
+            .reliability(eprosima::fastdds::dds::ReliabilityQosPolicyKind::BEST_EFFORT_RELIABILITY_QOS)
+            .metatraffic_unicast_locator_list(metatraffic_unicast)
+            .init();
+
+    ASSERT_TRUE(writer.isInitialized());
+    ASSERT_TRUE(reader.isInitialized());
+
+    writer.wait_discovery(std::chrono::seconds(5));
+    reader.wait_discovery(std::chrono::seconds(5));
+
+    ASSERT_EQ(writer.get_matched(), 1u);
+    ASSERT_EQ(reader.get_matched(), 1u);
+
+    // Although participants have matched, the TCP connection might not be established yet.
+    // This active wait ensures the connection had time to be established before sending non-reliable samples.
+    std::this_thread::sleep_for(std::chrono::seconds(3));
+
+    auto data = default_helloworld_data_generator();
+    reader.startReception(data);
+    writer.send(data);
+    ASSERT_TRUE(data.empty());
+
+    reader.block_for_all();
+}
+
+TEST_P(TransportTCP, large_data_tcp_no_frag)
+{
+    /* Test configuration */
+    PubSubWriter<Data100kbPubSubType> writer(TEST_TOPIC_NAME);
+    PubSubReader<Data100kbPubSubType> reader(TEST_TOPIC_NAME);
+
+    // Reliable keep all to wait of all acked as end condition
+    writer.reliability(eprosima::fastdds::dds::RELIABLE_RELIABILITY_QOS)
+            .history_kind(eprosima::fastdds::dds::KEEP_ALL_HISTORY_QOS);
+
+    reader.reliability(eprosima::fastdds::dds::RELIABLE_RELIABILITY_QOS)
+            .history_kind(eprosima::fastdds::dds::KEEP_ALL_HISTORY_QOS);
+
+    // Builtin transport configuration according to test_case
+    BuiltinTransportsOptions options;
+    options.maxMessageSize = 200000;
+    options.sockets_buffer_size = 200000;
+    writer.setup_large_data_tcp(use_ipv6, 0, options);
+    reader.setup_large_data_tcp(use_ipv6, 0, options);
+
+    /* Run test */
+    // Init writer
+    writer.init();
+    ASSERT_TRUE(writer.isInitialized());
+
+    // Init reader
+    reader.init();
+    ASSERT_TRUE(reader.isInitialized());
+
+    // Wait for discovery
+    writer.wait_discovery();
+    reader.wait_discovery();
+
+    // Send data
+    auto data = default_data100kb_data_generator();
+    reader.startReception(data);
+    writer.send(data);
+    ASSERT_TRUE(data.empty());
+
+    // Wait for reception acknowledgement
+    reader.block_for_all();
+    EXPECT_TRUE(writer.waitForAllAcked(std::chrono::seconds(3)));
 }
 
 #ifdef INSTANTIATE_TEST_SUITE_P
